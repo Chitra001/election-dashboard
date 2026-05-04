@@ -37,11 +37,13 @@
         .status-lead { background: #e9f4e9; padding: 2px 10px; border-radius: 20px; color: #1f6e43; }
         .status-trail { background: #ffe8e6; color: #b91c1c; padding: 2px 10px; border-radius: 20px; }
         .control-panel { background: white; border-radius: 2rem; padding: 1rem 2rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; box-shadow: 0 5px 12px rgba(0,0,0,0.05); }
-        .jump-select { background: #f1f5f9; border: none; padding: 12px 18px; border-radius: 60px; font-weight: 500; width: 280px; cursor: pointer; }
-        .btn-reset { background: #1e3a5f; border: none; padding: 8px 20px; border-radius: 40px; color: white; font-weight: 600; cursor: pointer; }
+        .search-group { flex: 2; min-width: 250px; position: relative; }
+        .search-input { width: 100%; padding: 12px 18px; border-radius: 60px; border: 1px solid #ddd; font-family: inherit; font-size: 0.9rem; background: white; }
+        .btn-reset { background: #1e3a5f; border: none; padding: 8px 20px; border-radius: 40px; color: white; font-weight: 600; cursor: pointer; white-space: nowrap; }
         footer { text-align: center; padding: 2rem; font-size: 0.75rem; color: #5a6e7c; }
-        @media (max-width: 700px) { .const-name { font-size: 1.4rem; } .candidates-grid { padding: 1rem; } }
+        @media (max-width: 700px) { .const-name { font-size: 1.4rem; } .candidates-grid { padding: 1rem; } .control-panel { flex-direction: column; align-items: stretch; } .search-group { width: 100%; } }
         .placeholder { text-align: center; padding: 2rem; color: #6c757d; background: #f8f9fa; border-radius: 1rem; }
+        datalist { background: white; border-radius: 1rem; }
     </style>
 </head>
 <body>
@@ -61,7 +63,10 @@
     </div>
     <div class="control-panel">
         <div><i class="fas fa-chart-line"></i> <strong>Constituency navigator</strong></div>
-        <select id="constituencyDropdown" class="jump-select"></select>
+        <div class="search-group">
+            <input list="constituencyList" id="searchInput" class="search-input" placeholder="🔍 Type constituency name or AC number..." autocomplete="off">
+            <datalist id="constituencyList"></datalist>
+        </div>
         <div class="info-note"><i class="fas fa-sync-alt"></i> Auto-cycle 15s · IST aligned</div>
         <button id="resetRotationBtn" class="btn-reset"><i class="fas fa-redo-alt"></i> Next constituency</button>
     </div>
@@ -122,13 +127,13 @@
     async function loadConstituencyList() {
         try {
             const data = await fetchJSON('/api/constituencies');
-            // Sort by ac_no ascending (1 to 294)
             allConstituencies = data.constituencies.sort((a,b) => a.ac_no - b.ac_no);
             if (!allConstituencies.length) throw new Error('Empty list');
-            populateDropdown();
+            buildDatalist();
             currentIndex = computeStartIndex();
             await loadCurrentConstituency();
             startRotation();
+            setupSearchListener();
         } catch(e) {
             console.error('Constituency list error', e);
             document.getElementById('constName').innerHTML = 'Failed to load constituency list.';
@@ -141,10 +146,8 @@
         try {
             const data = await fetchJSON(`/api/constituency/${constObj.code}`);
             displayConstituency(constObj, data);
-            updateDropdownSelection(constObj.code);
         } catch(e) {
             console.error('Load error', constObj.code, e);
-            // Show error placeholder
             document.getElementById('constName').innerHTML = constObj.name;
             document.getElementById('constExtras').innerHTML = `AC ${constObj.ac_no} • Error loading`;
             document.getElementById('dynamicCandidatesGrid').innerHTML = '<div class="placeholder">⚠️ Failed to fetch data</div>';
@@ -197,6 +200,8 @@
         currentIndex = (currentIndex + 1) % allConstituencies.length;
         loadCurrentConstituency();
         resetProgressBar();
+        // clear search input
+        document.getElementById('searchInput').value = '';
     }
 
     function resetProgressBar() {
@@ -251,7 +256,6 @@
     function resumeAuto() {
         autoCycle = true;
         if (allConstituencies.length) {
-            // Keep current index, don't reset to IST time to avoid jump
             loadCurrentConstituency();
         }
         startRotation();
@@ -260,36 +264,37 @@
         btn.onclick = () => nextSlide();
     }
 
-    function populateDropdown() {
-        const dropdown = document.getElementById('constituencyDropdown');
-        dropdown.innerHTML = '<option value="">-- Jump to constituency --</option>';
+    function buildDatalist() {
+        const datalist = document.getElementById('constituencyList');
+        datalist.innerHTML = '';
         allConstituencies.forEach(c => {
             const option = document.createElement('option');
-            option.value = c.code;
-            option.textContent = `${c.ac_no} - ${c.name}`;
-            dropdown.appendChild(option);
+            option.value = `${c.ac_no} - ${c.name}`;
+            // store the code as a data attribute for later lookup
+            option.setAttribute('data-code', c.code);
+            datalist.appendChild(option);
         });
-        dropdown.addEventListener('change', async (e) => {
-            const code = e.target.value;
-            if (!code) return;
-            if (autoCycle) pauseAuto();
-            const index = allConstituencies.findIndex(c => c.code === code);
-            if (index !== -1) {
-                currentIndex = index;
+    }
+
+    function setupSearchListener() {
+        const searchInput = document.getElementById('searchInput');
+        searchInput.addEventListener('input', async (e) => {
+            const selectedText = e.target.value;
+            if (!selectedText) return;
+            // find matching constituency from our list
+            const matched = allConstituencies.find(c => `${c.ac_no} - ${c.name}` === selectedText);
+            if (matched) {
+                if (autoCycle) pauseAuto();
+                currentIndex = allConstituencies.findIndex(c => c.code === matched.code);
                 await loadCurrentConstituency();
-            } else {
-                alert('Constituency not found');
-                if (autoCycle) resumeAuto();
+                // clear input to avoid confusion
+                searchInput.value = '';
             }
         });
+        // also allow direct enter with partial match? Not needed because datalist forces exact match.
     }
 
-    function updateDropdownSelection(code) {
-        const dropdown = document.getElementById('constituencyDropdown');
-        if (dropdown) dropdown.value = code;
-    }
-
-    // Initialise
+    // ---------- INITIALISE ----------
     (async function init() {
         await loadPartyTotals();
         await loadConstituencyList();
